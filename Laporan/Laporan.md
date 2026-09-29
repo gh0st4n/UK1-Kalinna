@@ -1,6 +1,6 @@
 # LAPORAN PENTEST — Aplikasi Management Data Siswa
 
-- **Target:** `http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/`
+- **Target:** `http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/`
 - **Setup Lab:** Aplikasi berjalan di **Windows (Laragon)**, Attacker di **Kali Linux**
 - **Tanggal:** 21–22 September 2026
 - **Tester:** gh0st4n
@@ -53,6 +53,7 @@ Dengan credential yang didapat, penyerang bisa **login sebagai admin** dan menga
 **Catatan penting:** Setup lab ini **sengaja** dibuat rentan untuk keperluan pembelajaran. Di lingkungan production, konfigurasi seperti ini **tidak boleh** terjadi.
 
 **Prioritas perbaikan:**
+
 1. Blokir akses ke `.git` di web server (Production)
 2. Rotasi seluruh password
 3. Hapus git history yang mengandung credential (Production)
@@ -62,20 +63,21 @@ Dengan credential yang didapat, penyerang bisa **login sebagai admin** dan menga
 
 ## 2. Lingkup & Setup Lab
 
-| Komponen       | Detail                                             |
-|----------------|----------------------------------------------------|
-| **Aplikasi**   | Management Data Siswa (PHP + MySQL)                |
-| **Web Server** | Laragon (Windows)                                  |
-| **Target IP**  | `192.168.100.247`                                  |
-| **Attacker**   | Kali Linux (VM)                                    |
-| **Jaringan**   | Bridged / Host-Only (satu subnet `192.168.100.x`)  |
-| **Scope**      | `http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/` |
+| Komponen       | Detail                                                   |
+| -------------- | -------------------------------------------------------- |
+| **Aplikasi**   | Management Data Siswa (PHP + MySQL)                      |
+| **Web Server** | Laragon (Windows)                                        |
+| **Target IP**  | `192.168.100.247`                                        |
+| **Attacker**   | Kali Linux (VM)                                          |
+| **Jaringan**   | Bridged / Host-Only (satu subnet `192.168.100.x`)        |
+| **Scope**      | `http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/` |
 
 **Catatan:** Karena attacker & victim berada di **satu jaringan**, sniffing HTTP (tanpa TLS) menjadi **realistis** dan **valid** untuk diuji.
 
 ## 3. Metodologi & Reconnaissance
 
 ### Tools
+
 - `feroxbuster` - directory brute-force
 - `git-dumper` - recovery `.git`
 - `exiftool` - analisis file
@@ -83,12 +85,14 @@ Dengan credential yang didapat, penyerang bisa **login sebagai admin** dan menga
 - `curl` / browser - manual testing
 
 ### Reconnaissance
+
 ```bash
 feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina \
   -w /usr/share/wordlists/dirb/common.txt
 ```
 
 **Hasil menarik:**
+
 ```
 200  .git/HEAD                          → Git exposed
 200  config/database.php                → Config DB
@@ -111,13 +115,14 @@ feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina \
 **Deskripsi:**
 Folder `.git` dapat diakses publik via HTTP, memungkinkan recovery source code lengkap. Laragon (default) tidak memblokir akses ke `.git`.
 
-**URL:** `http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/.git/`
+**URL:** `http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/`
 
 **Proof of Concept:**
-```bash
-git-dumper http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/.git/ ./hasil-git
 
-[-] Testing http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/.git/HEAD [200]
+```bash
+git-dumper http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/ ./hasil-git
+
+[-] Testing http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/HEAD [200]
 [-] Fetching .git recursively
 ...
 [-] Running git checkout .
@@ -125,10 +130,12 @@ Updated 65 paths from the index
 ```
 
 **Hasil:**
+
 - **65 file** source code ter-recover
 - Termasuk `config/database.php`, `classes/auth.php`, `db_management_data_siswa.sql`
 
 **Dampak:**
+
 - Source code lengkap terekspos → memudahkan analisis kerentanan
 - Git history bisa dibaca → credential yang dihapus masih ada
 - File SQL dump ikut terekspos
@@ -136,11 +143,14 @@ Updated 65 paths from the index
 **Severity:** 🔴 **CRITICAL** (CVSS 9.1)
 
 **Remediasi:**
+
 ```apache
 # Laragon / Apache .htaccess
 RedirectMatch 404 /\.git
 ```
+
 Atau di Nginx:
+
 ```nginx
 location ~ /\.git { deny all; }
 ```
@@ -151,11 +161,13 @@ location ~ /\.git { deny all; }
 File `fix.php` dihapus di commit `54cffb3` ("Hapus file skrip pemulihan fix.php demi keamanan"), tapi **plaintext password masih tersimpan di git history**.
 
 **Proof of Concept:**
+
 ```bash
 git log -p --all | grep -iE "password|secret"
 ```
 
 **Output:**
+
 ```php
 $passAdmin = password_hash('kalinadmin08', PASSWORD_BCRYPT);
 $passUser  = password_hash('user99887711', PASSWORD_BCRYPT);
@@ -166,19 +178,22 @@ echo "<p>Password User: <b>user99887711</b></p>";
 **Credential yang Didapat:**
 
 | Role  | Username | Password       | Status         |
-|-------|----------|----------------|----------------|
+| ----- | -------- | -------------- | -------------- |
 | Admin | `admin`  | `kalinadmin08` | Login berhasil |
 | User  | `user`   | `user99887711` | Valid          |
 
 **Eksploitasi:**
+
 ```
-URL: http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/login.php
+URL: http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/login.php
 Username: admin
 Password: kalinadmin08
 ```
+
 → **Login berhasil sebagai admin** ✅
 
 **Dampak:**
+
 - Full access ke aplikasi sebagai admin
 - CRUD data siswa, guru, kelas, absensi
 - Upload file
@@ -186,6 +201,7 @@ Password: kalinadmin08
 **Severity:** 🔴 **CRITICAL** (CVSS 9.8)
 
 **Remediasi:**
+
 - Rotasi seluruh password (admin, user, DB)
 - Hapus git history:
   ```bash
@@ -199,30 +215,36 @@ Password: kalinadmin08
 File `db_management_data_siswa.sql` ikut ter-commit ke repository, berisi struktur DB + data siswa + hash password.
 
 **Proof of Concept:**
+
 ```bash
 cat db_management_data_siswa.sql
 ```
 
 **Isi:**
+
 - Data guru (5 record)
 - Data kelas (9 record)
 - Data siswa (22 record: NISN, nama, alamat, foto)
 - Data user (username + hash password)
 
 **Hash Password:**
+
 ```
 admin : d7caed25e5bf33da4e752d774afed033
 user  : f0bdd8a9ebdae53c6a61907a4333c9e9
 ```
-*Catatan: hash MD5 ini kemungkinan sudah tidak valid (diganti bcrypt via `fix.php`).*
+
+_Catatan: hash MD5 ini kemungkinan sudah tidak valid (diganti bcrypt via `fix.php`)._
 
 **Dampak:**
+
 - Data pribadi siswa bocor (nama, NISN, alamat, foto)
 - Struktur DB terekspos
 
 **Severity:** 🟠 **HIGH** (CVSS 7.5)
 
 **Remediasi:**
+
 - Hapus file `.sql` dari repository
 - Tambahkan `*.sql` ke `.gitignore`
 - Rotasi hash password
@@ -233,15 +255,17 @@ user  : f0bdd8a9ebdae53c6a61907a4333c9e9
 Beberapa direktori mengaktifkan directory listing, memungkinkan enumerasi file.
 
 **URL:**
+
 ```
-http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/uploads/
-http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/config/
-http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/classes/
-http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/note/
-http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/views/
+http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/uploads/
+http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/config/
+http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/classes/
+http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/note/
+http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/views/
 ```
 
 **Dampak:**
+
 - Enumerasi file yang pernah di-upload
 - Akses file sensitif (foto siswa, surat dokter)
 - Reconnaissance struktur aplikasi
@@ -249,6 +273,7 @@ http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/views/
 **Severity:** 🟡 **MEDIUM** (CVSS 5.3)
 
 **Remediasi:**
+
 ```apache
 Options -Indexes
 ```
@@ -259,24 +284,28 @@ Options -Indexes
 Cookie `PHPSESSID` dikirim dalam bentuk **plaintext** (karena tidak ada HTTPS). Attacker di jaringan yang sama bisa sniff traffic dan mengambil cookie untuk hijack session.
 
 **Proof of Concept:**
+
 ```
 Cookie yang ditangkap via Wireshark:
 PHPSESSID=6ridmd343lph1ec08qmghn5ua6
 ```
 
 **Eksploitasi:**
+
 1. Sniff traffic HTTP di jaringan lokal (Wireshark / tcpdump)
 2. Ambil cookie `PHPSESSID` milik victim
 3. Inject cookie ke browser (Cookie Editor)
 4. Akses aplikasi **tanpa login**
 
 **Dampak:**
+
 - Akses tanpa credential
 - Jika session admin yang di-hijack → **full access**
 
 **Severity:** 🟡 **MEDIUM** (CVSS 5.9)
 
 **Remediasi:**
+
 - **Aktifkan HTTPS** (TLS/SSL)
 - Set cookie flag:
   ```php
@@ -298,12 +327,14 @@ NISN tidak divalidasi format numerik — bisa diinput karakter apa saja.
 Input `<script>alert(1)</script>` pada field NISN → **tersimpan di DB** (tapi tidak XSS karena output di-escape `htmlspecialchars()`).
 
 Dari screenshot `siswa_list.php`:
+
 ```
 NISN: 010101101010
 Nama: <script>alert(1)</script>   ← muncul sebagai teks, bukan alert
 ```
 
 **Dampak:**
+
 - Data tidak akurat
 - Memperlambat maintenance
 - Potensi data integrity issue
@@ -311,6 +342,7 @@ Nama: <script>alert(1)</script>   ← muncul sebagai teks, bukan alert
 **Severity:** 🟢 **LOW** (CVSS 3.1)
 
 **Remediasi:**
+
 ```php
 if (!preg_match('/^[0-9]{10}$/', $nisn)) {
     $error = "NISN harus 10 digit angka.";
@@ -319,8 +351,8 @@ if (!preg_match('/^[0-9]{10}$/', $nisn)) {
 
 ## 5. Vektor yang Diuji & Aman
 
-| Vektor                          | Status        | Bukti                                                                         |
-|---------------------------------|---------------|-------------------------------------------------------------------------------|
+| Vektor                          | Status       | Bukti                                                                          |
+| ------------------------------- | ------------ | ------------------------------------------------------------------------------ |
 | **SQL Injection**               | ✅ Aman      | Semua query pakai `prepare()` + `bindParam()`                                  |
 | **XSS**                         | ✅ Aman      | Output di-escape `htmlspecialchars()`                                          |
 | **CSRF**                        | ✅ Aman      | Token + `hash_equals()` di semua form                                          |
@@ -333,20 +365,21 @@ if (!preg_match('/^[0-9]{10}$/', $nisn)) {
 
 ## 6. Matriks Risiko
 
-| #   | Temuan                         | Severity    | CVSS | Status                    |
-|-----|--------------------------------|-------------|------|---------------------------|
-| 4.1 | Git Repository Exposure        | 🔴 Critical | 9.1 | Confirmed                  |
-| 4.2 | Credential Leak di Git History | 🔴 Critical | 9.8 | Confirmed (login berhasil) |
-| 4.3 | Database Dump Ke-commit        | 🟠 High     | 7.5 | Confirmed                  |
-| 4.4 | Directory Listing Aktif        | 🟡 Medium   | 5.3 | Confirmed                  |
-| 4.5 | Session Hijacking via HTTP     | 🟡 Medium   | 5.9 | Confirmed                  |
-| 4.6 | Business Logic - Validasi NISN | 🟢 Low      | 3.1 | Confirmed                  |
+| #   | Temuan                         | Severity    | CVSS | Status                     |
+| --- | ------------------------------ | ----------- | ---- | -------------------------- |
+| 4.1 | Git Repository Exposure        | 🔴 Critical | 9.1  | Confirmed                  |
+| 4.2 | Credential Leak di Git History | 🔴 Critical | 9.8  | Confirmed (login berhasil) |
+| 4.3 | Database Dump Ke-commit        | 🟠 High     | 7.5  | Confirmed                  |
+| 4.4 | Directory Listing Aktif        | 🟡 Medium   | 5.3  | Confirmed                  |
+| 4.5 | Session Hijacking via HTTP     | 🟡 Medium   | 5.9  | Confirmed                  |
+| 4.6 | Business Logic - Validasi NISN | 🟢 Low      | 3.1  | Confirmed                  |
 
 **Total:** 2 Critical, 1 High, 2 Medium, 1 Low
 
 ## 7. Rekomendasi Perbaikan
 
 ### Prioritas 1 (Immediate)
+
 1. **Blokir akses `.git`** di web server config (Apache/Nginx)
 2. **Rotasi seluruh password** (admin, user, DB)
 3. **Hapus git history** yang mengandung credential:
@@ -357,12 +390,14 @@ if (!preg_match('/^[0-9]{10}$/', $nisn)) {
 4. **Hapus `.sql` dari repo** + tambahkan ke `.gitignore`
 
 ### Prioritas 2 (Short-term)
+
 5. **Nonaktifkan directory listing** (`Options -Indexes`)
 6. **Aktifkan HTTPS** (TLS/SSL)
 7. **Set cookie flag**: `Secure`, `HttpOnly`, `SameSite=Strict`
 8. **Regenerasi session ID** setelah login
 
 ### Prioritas 3 (Long-term)
+
 9. **Validasi input NISN** (hanya angka, 10 digit)
 10. **Gunakan environment variable** untuk credential (`.env`)
 11. **Aktifkan logging & monitoring** untuk akses `.git`
@@ -443,11 +478,13 @@ uploads/*
 Jangan hardcode credential di source code. Pakai `.env`:
 
 **Install:**
+
 ```bash
 composer require vlucas/phpdotenv
 ```
 
 **Buat `.env` (JANGAN di-commit):**
+
 ```env
 DB_HOST=localhost
 DB_NAME=db_management_data_siswa
@@ -456,6 +493,7 @@ DB_PASS=your_secure_password
 ```
 
 **Buat `.env.example` (INI yang di-commit):**
+
 ```env
 DB_HOST=localhost
 DB_NAME=your_db_name
@@ -464,6 +502,7 @@ DB_PASS=your_db_password
 ```
 
 **Update `config/database.php`:**
+
 ```php
 <?php
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -490,18 +529,21 @@ class Database {
 ### 8.3 Scan Credential Sebelum Push
 
 **TruffleHog:**
+
 ```bash
 pip install trufflehog
 trufflehog git file://. --only-verified
 ```
 
 **Gitleaks:**
+
 ```bash
 docker run -v $(pwd):/path zricethezav/gitleaks:latest detect \
   --source="/path" --verbose
 ```
 
 **Manual grep:**
+
 ```bash
 grep -rniE "password|passwd|secret|api_key|token|private_key" . \
   --exclude-dir=.git \
@@ -544,6 +586,7 @@ exit 0
 ```
 
 Beri permission:
+
 ```bash
 chmod +x .git/hooks/pre-commit
 ```
@@ -551,6 +594,7 @@ chmod +x .git/hooks/pre-commit
 **Atau pakai `pre-commit` framework:**
 
 `.pre-commit-config.yaml`:
+
 ```yaml
 repos:
   - repo: https://github.com/gitleaks/gitleaks
@@ -565,6 +609,7 @@ repos:
 ```
 
 Install:
+
 ```bash
 pip install pre-commit
 pre-commit install
@@ -573,6 +618,7 @@ pre-commit install
 ### 8.5 Kalau Sudah Terlanjur Commit — Bersihkan History
 
 **Pakai `git-filter-repo` (recommended):**
+
 ```bash
 pip install git-filter-repo
 
@@ -587,6 +633,7 @@ git push origin --force --tags
 ```
 
 **Atau pakai BFG Repo-Cleaner:**
+
 ```bash
 wget https://repo1.maven.org/maven2/com/madgag/bfg/1.14.0/bfg-1.14.0.jar
 java -jar bfg-1.14.0.jar --delete-files fix.php
@@ -603,11 +650,13 @@ git push origin --force --all
 ### 8.6 Gunakan GitHub Secrets untuk CI/CD
 
 Jangan taruh credential di workflow file. Set di:
+
 ```
 Repo → Settings → Secrets and variables → Actions → New repository secret
 ```
 
 Pakai di workflow:
+
 ```yaml
 - name: Deploy
   env:
@@ -678,41 +727,38 @@ git push -u origin main
 ### 8.9 Emergency Response — Kalau Credential Bocor
 
 **Immediate (0-1 jam):**
+
 1. Rotasi semua password yang bocor
 2. Revoke API key / token yang bocor
 3. Hapus file dari repo + history
 4. Force push ke remote
 
-**Short-term (1-24 jam):**
-5. Cek log akses — apakah ada login mencurigakan?
-6. Notifikasi tim — kasih tau kalau ada insiden
-7. Monitor akun / sistem terkait
+**Short-term (1-24 jam):** 5. Cek log akses — apakah ada login mencurigakan? 6. Notifikasi tim — kasih tau kalau ada insiden 7. Monitor akun / sistem terkait
 
-**Long-term (1-7 hari):**
-8. Audit semua repo untuk credential lain
-9. Update `.gitignore` di semua repo
-10. Training developer soal security
+**Long-term (1-7 hari):** 8. Audit semua repo untuk credential lain 9. Update `.gitignore` di semua repo 10. Training developer soal security
 
 ## 9. Lampiran
 
 ### A. Command yang Digunakan
+
 ```bash
 # Reconnaissance
 feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina -w /usr/share/wordlists/dirb/common.txt
 
 # Git dump
-git-dumper http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/.git/ ./hasil-git
+git-dumper http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/ ./hasil-git
 
 # Credential search
 git log -p --all | grep -iE "password|secret|api_key|token"
 
 # Directory listing check
-curl http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/uploads/
+curl http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/uploads/
 ```
 
 ### B. Timeline
+
 | Tanggal     | Aktivitas                                         |
-|-------------|---------------------------------------------------|
+| ----------- | ------------------------------------------------- |
 | 21 Sep 2026 | Reconnaissance + git-dumper                       |
 | 21 Sep 2026 | Analisis source code + credential leak            |
 | 22 Sep 2026 | Login admin + testing vektor lain                 |
@@ -720,6 +766,7 @@ curl http://192.168.100.247/UK-PKL_Banjar/UK1-Kalina/uploads/
 | 22 Sep 2026 | Testing upload webshell (gagal — whitelist ketat) |
 
 ### C. Struktur File yang Ter-recover
+
 ```
 hasil-git/
 ├── absensi.php
@@ -746,6 +793,7 @@ hasil-git/
 ```
 
 ### D. Referensi
+
 - OWASP Top 10 2021: A01 (Broken Access Control), A02 (Cryptographic Failures), A05 (Security Misconfiguration)
 - CWE-538: File and Directory Information Exposure
 - CWE-798: Use of Hard-coded Credentials
@@ -757,4 +805,4 @@ hasil-git/
 
 **— END OF REPORT —**
 
-*Laporan ini dibuat untuk keperluan pembelajaran / authorized pentest. Penggunaan tanpa izin adalah ilegal.*
+_Laporan ini dibuat untuk keperluan pembelajaran / authorized pentest. Penggunaan tanpa izin adalah ilegal._

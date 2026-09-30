@@ -1290,8 +1290,7 @@ LaporanV2/
 ├── Laporanv2.md          ← dokumen ini
 ├── file_bypass.py        ← PoC upload bypass base64
 ├── me.jpeg               ← sample image untuk PoC
-├── note.md               ← catatan perbaikan (v1.1 & v1.2)
-└── siswa_absensifix.php  ← source code yang sudah dipatch
+└── note.md               ← catatan perbaikan (v1.1 & v1.2)
 ```
 
 **`LaporanV2/file_bypass.py`:**
